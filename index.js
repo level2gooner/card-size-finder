@@ -7,6 +7,7 @@ const PANEL_ID = 'card_size_finder';
 const CONCURRENCY = 4;
 const SAMPLE_SIZE = 40;
 const MAX_KEYS = 50000;
+const MAX_FOLDERS = 30;
 const PROMPT_DB = 'SillyTavern_Prompts';
 const KNOWN_DATABASES = [
     PROMPT_DB,
@@ -139,18 +140,46 @@ async function scanSprites(characters, onProgress) {
     return measureUrls(urls);
 }
 
-async function scanGallery() {
+async function scanGallery(onProgress) {
     const folders = await postJson('/api/images/folders');
     if (!Array.isArray(folders)) return null;
-    const urls = [];
+
+    const perFolder = [];
+    const jobs = [];
     await pool(folders, async (folder) => {
         const files = await postJson('/api/images/list', { folder, type: 0b111 });
         if (!Array.isArray(files)) return;
+        const entry = { folder, bytes: 0, files: 0 };
+        perFolder.push(entry);
         for (const file of files) {
-            urls.push(`/user/images/${encodeURIComponent(folder)}/${encodeURIComponent(file)}`);
+            jobs.push({ entry, url: `/user/images/${encodeURIComponent(folder)}/${encodeURIComponent(file)}` });
         }
     });
-    return measureUrls(urls);
+
+    let done = 0;
+    await pool(jobs, async (job) => {
+        const size = await getUrlBytes(job.url);
+        if (size !== null) {
+            job.entry.bytes += size;
+            job.entry.files++;
+        }
+        done++;
+        if (done % 50 === 0) onProgress?.(done, jobs.length);
+    });
+
+    perFolder.sort((x, y) => y.bytes - x.bytes);
+    return {
+        bytes: perFolder.reduce((sum, f) => sum + f.bytes, 0),
+        files: perFolder.reduce((sum, f) => sum + f.files, 0),
+        folders: perFolder,
+    };
+}
+
+/** The character whose gallery uses this folder, if there is one. */
+function findCharacterForFolder(folder) {
+    const context = getContext();
+    const mapped = context?.extensionSettings?.gallery?.folders ?? {};
+    return (context?.characters ?? []).find(c => c && (mapped[c.avatar] ?? c.name) === folder);
 }
 
 async function scanBackgrounds() {
@@ -360,8 +389,10 @@ function buildPanel() {
                 </div>
                 <div class="csf_status"></div>
                 <div class="csf_breakdown"></div>
+                <div class="csf_folders_summary"></div>
+                <div class="csf_folders csf_list"></div>
                 <div class="csf_summary"></div>
-                <div class="csf_list"></div>
+                <div class="csf_characters csf_list"></div>
             </div>
         </div>`;
     return root;
@@ -440,11 +471,50 @@ function renderBreakdown(root) {
     ));
 }
 
+function renderFolders(root) {
+    const summary = root.querySelector('.csf_folders_summary');
+    const list = root.querySelector('.csf_folders');
+    summary.replaceChildren();
+    list.replaceChildren();
+    const folders = breakdown?.galleryFolders?.filter(f => f.files > 0);
+    if (!folders?.length) return;
+
+    const shown = folders.slice(0, MAX_FOLDERS);
+    summary.append(
+        element('b', '', 'Biggest gallery folders'),
+        ` · ${folders.length} folder${folders.length === 1 ? '' : 's'}${folders.length > shown.length ? `, top ${shown.length} shown` : ''}`,
+    );
+
+    const max = shown[0].bytes || 1;
+    shown.forEach((folder, index) => {
+        const character = findCharacterForFolder(folder.folder);
+        const item = element('div', 'csf_row');
+        item.dataset.folder = folder.folder;
+        if (character) {
+            item.setAttribute('role', 'button');
+            item.tabIndex = 0;
+            item.dataset.avatar = character.avatar;
+        } else {
+            item.classList.add('csf_static');
+        }
+        const main = element('div', 'csf_main');
+        main.append(
+            element('div', 'csf_name', folder.folder),
+            element('div', 'csf_detail', `${folder.files} file${folder.files === 1 ? '' : 's'}${character ? '' : ' · no character with this name'}`),
+        );
+        const bar = element('div', 'csf_bar');
+        bar.style.width = `${Math.max(1, Math.round((folder.bytes / max) * 100))}%`;
+        item.append(element('div', 'csf_rank', String(index + 1)), main, element('div', 'csf_total', formatBytes(folder.bytes)), bar);
+        list.append(item);
+    });
+}
+
 function render(root) {
     renderBreakdown(root);
+    renderFolders(root);
 
     const summary = root.querySelector('.csf_summary');
-    const list = root.querySelector('.csf_list');
+    const list = root.querySelector('.csf_characters');
     list.replaceChildren();
     summary.replaceChildren();
     if (!results || results.length === 0) return;
@@ -511,6 +581,7 @@ async function scan(root) {
     let failed = 0;
     const rows = [];
     let databases = [];
+    let galleryFolders = [];
 
     try {
         // 1. Cards and chats
@@ -549,7 +620,8 @@ async function scan(root) {
         }
         if (!stopRequested) {
             setStatus(root, 'Checking gallery images…');
-            const gallery = await scanGallery();
+            const gallery = await scanGallery((n, total) => setStatus(root, `Checking gallery images… ${n} / ${total}`));
+            galleryFolders = gallery?.folders ?? [];
             rows.push(fileRow('gallery', 'Gallery and generated images', gallery));
         }
         if (!stopRequested) {
@@ -570,7 +642,7 @@ async function scan(root) {
         }
     } finally {
         results = found.filter(Boolean);
-        breakdown = { rows, databases };
+        breakdown = { rows, databases, galleryFolders };
         setScanning(root, false);
     }
 
@@ -616,10 +688,12 @@ function init() {
         setStatus(root, 'Stopping…');
     });
     root.querySelector('.csf_sort').addEventListener('change', () => render(root));
-    onActivate(root.querySelector('.csf_list'), (event) => {
-        const row = event.target.closest('.csf_row');
-        if (row) openCharacter(row.dataset.avatar);
-    });
+    for (const list of root.querySelectorAll('.csf_list')) {
+        onActivate(list, (event) => {
+            const row = event.target.closest('.csf_row');
+            if (row?.dataset.avatar) openCharacter(row.dataset.avatar);
+        });
+    }
 }
 
 if (document.readyState === 'loading') {

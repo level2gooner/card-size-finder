@@ -155,3 +155,24 @@
     border: 1px solid var(--SmartThemeQuoteColor, #e18a24);
     font-size: 0.9em;
 }
+
+#card_size_finder .csf_folders_summary:empty {
+    display: none;
+}
+
+#card_size_finder .csf_folders_summary {
+    margin: 4px 0 6px;
+}
+
+#card_size_finder .csf_folders {
+    max-height: 45vh;
+    margin-bottom: 10px;
+}
+
+#card_size_finder .csf_row.csf_static {
+    cursor: default;
+}
+
+#card_size_finder .csf_row.csf_static:hover {
+    background: none;
+}
