@@ -1,7 +1,9 @@
 // Card Size Finder
 // Shows where your storage goes: character cards and chats (ranked per
 // character), plus sprites, gallery images, backgrounds, Data Bank files and
-// the app's in-browser data. Read-only: it never changes or deletes anything.
+// the app's in-browser data.
+// Scanning only reads. The one thing that can delete is the "Delete all" button
+// inside a gallery folder, and only after you confirm.
 
 const PANEL_ID = 'card_size_finder';
 const CONCURRENCY = 4;
@@ -21,6 +23,10 @@ let results = null;
 let breakdown = null;
 let scanning = false;
 let stopRequested = false;
+let expandedFolder = null;
+let confirmingFolder = null;
+let deleting = null; // { folder, done, total, cancel }
+let folderNotice = '';
 
 function getContext() {
     return globalThis.SillyTavern?.getContext?.();
@@ -78,10 +84,10 @@ export function getCardBytes(avatar) {
 }
 
 /** Runs fn over items a few at a time. Stops early if Stop was tapped. */
-async function pool(items, fn) {
+async function pool(items, fn, shouldStop = () => stopRequested) {
     let next = 0;
     async function worker() {
-        while (!stopRequested) {
+        while (!shouldStop()) {
             const index = next++;
             if (index >= items.length) return;
             await fn(items[index], index);
@@ -149,10 +155,10 @@ async function scanGallery(onProgress) {
     await pool(folders, async (folder) => {
         const files = await postJson('/api/images/list', { folder, type: 0b111 });
         if (!Array.isArray(files)) return;
-        const entry = { folder, bytes: 0, files: 0 };
+        const entry = { folder, bytes: 0, files: 0, items: [] };
         perFolder.push(entry);
         for (const file of files) {
-            jobs.push({ entry, url: `/user/images/${encodeURIComponent(folder)}/${encodeURIComponent(file)}` });
+            jobs.push({ entry, name: file, url: `/user/images/${encodeURIComponent(folder)}/${encodeURIComponent(file)}` });
         }
     });
 
@@ -162,6 +168,7 @@ async function scanGallery(onProgress) {
         if (size !== null) {
             job.entry.bytes += size;
             job.entry.files++;
+            job.entry.items.push({ name: job.name, url: job.url, bytes: size });
         }
         done++;
         if (done % 50 === 0) onProgress?.(done, jobs.length);
@@ -175,11 +182,92 @@ async function scanGallery(onProgress) {
     };
 }
 
-/** The character whose gallery uses this folder, if there is one. */
-function findCharacterForFolder(folder) {
+/** Mirrors how the app turns a name into a folder name. */
+export function toFolderName(name) {
+    return String(name ?? '')
+        .replace(/[\/?<>\\:*|"]/g, '')
+        .replace(/[\x00-\x1f\x80-\x9f]/g, '')
+        .replace(/[. ]+$/, '');
+}
+
+/** Who a gallery folder belongs to: a character, a group, one of your personas, or nobody. */
+export function findFolderOwner(folder) {
     const context = getContext();
     const mapped = context?.extensionSettings?.gallery?.folders ?? {};
-    return (context?.characters ?? []).find(c => c && (mapped[c.avatar] ?? c.name) === folder);
+    const matches = name => name === folder || toFolderName(name) === folder;
+
+    const character = (context?.characters ?? []).find(c => c && (matches(mapped[c.avatar] ?? c.name) || matches(c.name)));
+    if (character) return { type: 'character', avatar: character.avatar };
+    if ((context?.groups ?? []).some(g => g && matches(g.name))) return { type: 'group' };
+    const personas = Object.values(context?.powerUserSettings?.personas ?? {});
+    if (personas.some(matches) || matches(context?.name1)) return { type: 'persona' };
+    return { type: 'none' };
+}
+
+const OWNER_LABELS = {
+    character: '',
+    group: ' · group chat',
+    persona: ' · your persona',
+    none: ' · no character, group or persona with this name',
+};
+
+async function deleteFolderImages(root, entry) {
+    if (deleting || scanning) return;
+    const items = [...entry.items];
+    deleting = { folder: entry.folder, done: 0, total: items.length, cancel: false };
+    confirmingFolder = null;
+    folderNotice = '';
+    renderFolders(root);
+
+    const headers = getContext()?.getRequestHeaders?.() ?? { 'Content-Type': 'application/json' };
+    let removed = 0;
+    let freed = 0;
+    let failed = 0;
+    const state = deleting;
+    try {
+        await pool(items, async (item) => {
+            let ok = false;
+            try {
+                const response = await fetch('/api/images/delete', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ path: item.url }),
+                });
+                ok = response.ok;
+            } catch {
+                ok = false;
+            }
+            if (ok) {
+                removed++;
+                freed += item.bytes;
+                const index = entry.items.indexOf(item);
+                if (index >= 0) entry.items.splice(index, 1);
+            } else {
+                failed++;
+            }
+            state.done++;
+            if (state.done % 5 === 0 || state.done === state.total) {
+                const progress = root.querySelector('.csf_delete_progress');
+                if (progress) progress.textContent = `Deleting… ${state.done} / ${state.total}`;
+            }
+        }, () => state.cancel);
+    } finally {
+        entry.bytes = entry.items.reduce((sum, item) => sum + item.bytes, 0);
+        entry.files = entry.items.length;
+        const row = breakdown?.rows.find(r => r.key === 'gallery');
+        if (row) {
+            const folders = breakdown.galleryFolders;
+            row.bytes = folders.reduce((sum, f) => sum + f.bytes, 0);
+            row.label = `Gallery and generated images (${folders.reduce((sum, f) => sum + f.files, 0)})`;
+        }
+        breakdown?.galleryFolders.sort((x, y) => y.bytes - x.bytes);
+        folderNotice = `Deleted ${removed} file${removed === 1 ? '' : 's'} from "${entry.folder}" and freed ${formatBytes(freed)}.`;
+        if (state.cancel) folderNotice += ' Stopped early.';
+        if (failed) folderNotice += ` ${failed} couldn't be deleted.`;
+        if (entry.files === 0) expandedFolder = null;
+        deleting = null;
+        render(root);
+    }
 }
 
 async function scanBackgrounds() {
@@ -377,7 +465,7 @@ function buildPanel() {
                 <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
             </div>
             <div class="inline-drawer-content">
-                <small class="csf_info">Shows where your storage goes, and ranks your characters by size (card image plus chat history). It only reads; nothing is changed or deleted. Tap a character to open it.</small>
+                <small class="csf_info">Shows where your storage goes, and ranks your characters by size (card image plus chat history). Scanning only reads. Nothing is deleted unless you open a gallery folder, tap Delete all and confirm.</small>
                 <div class="csf_controls">
                     <div class="menu_button csf_scan" role="button" tabindex="0">Scan</div>
                     <div class="menu_button csf_stop" role="button" tabindex="0" style="display:none">Stop</div>
@@ -390,6 +478,7 @@ function buildPanel() {
                 <div class="csf_status"></div>
                 <div class="csf_breakdown"></div>
                 <div class="csf_folders_summary"></div>
+                <div class="csf_folder_notice"></div>
                 <div class="csf_folders csf_list"></div>
                 <div class="csf_summary"></div>
                 <div class="csf_characters csf_list"></div>
@@ -471,41 +560,119 @@ function renderBreakdown(root) {
     ));
 }
 
+const IMAGE_FILE = /\.(png|jpe?g|webp|gif|avif|bmp)$/i;
+
+function button(label, className, handler) {
+    const node = element('div', `menu_button ${className}`, label);
+    node.setAttribute('role', 'button');
+    node.tabIndex = 0;
+    onActivate(node, (event) => {
+        event.stopPropagation();
+        handler();
+    });
+    return node;
+}
+
+function buildFolderPanel(root, entry, owner) {
+    const panel = element('div', 'csf_folder_panel');
+
+    const previews = entry.items.filter(item => IMAGE_FILE.test(item.name)).slice(0, 6);
+    if (previews.length) {
+        const strip = element('div', 'csf_previews');
+        for (const item of previews) {
+            const image = document.createElement('img');
+            image.loading = 'lazy';
+            image.decoding = 'async';
+            image.alt = '';
+            image.src = item.url;
+            strip.append(image);
+        }
+        panel.append(strip);
+    }
+
+    if (deleting?.folder === entry.folder) {
+        const state = deleting;
+        panel.append(
+            element('div', 'csf_delete_progress', `Deleting… ${state.done} / ${state.total}`),
+            button('Stop deleting', 'csf_cancel_delete', () => {
+                state.cancel = true;
+            }),
+        );
+        return panel;
+    }
+
+    if (confirmingFolder === entry.folder) {
+        const box = element('div', 'csf_confirm');
+        box.append(element(
+            'div',
+            '',
+            `Delete all ${entry.files} file${entry.files === 1 ? '' : 's'} (${formatBytes(entry.bytes)}) in "${entry.folder}"? This can't be undone. Chat messages that showed these images will show a broken picture instead.`,
+        ));
+        const actions = element('div', 'csf_actions');
+        actions.append(
+            button(`Yes, delete ${entry.files} file${entry.files === 1 ? '' : 's'}`, 'csf_confirm_delete', () => deleteFolderImages(root, entry)),
+            button('Cancel', 'csf_cancel', () => {
+                confirmingFolder = null;
+                renderFolders(root);
+            }),
+        );
+        box.append(actions);
+        panel.append(box);
+        return panel;
+    }
+
+    const actions = element('div', 'csf_actions');
+    if (owner.type === 'character') {
+        actions.append(button('Open character', 'csf_open', () => openCharacter(owner.avatar)));
+    }
+    if (!deleting && !scanning) {
+        actions.append(button('Delete all…', 'csf_delete', () => {
+            confirmingFolder = entry.folder;
+            renderFolders(root);
+        }));
+    }
+    panel.append(actions);
+    return panel;
+}
+
 function renderFolders(root) {
     const summary = root.querySelector('.csf_folders_summary');
+    const notice = root.querySelector('.csf_folder_notice');
     const list = root.querySelector('.csf_folders');
     summary.replaceChildren();
     list.replaceChildren();
-    const folders = breakdown?.galleryFolders?.filter(f => f.files > 0);
-    if (!folders?.length) return;
+    notice.textContent = folderNotice;
+    const all = breakdown?.galleryFolders ?? [];
+    const folders = all.filter(f => f.files > 0);
+    if (!folders.length) return;
 
     const shown = folders.slice(0, MAX_FOLDERS);
     summary.append(
         element('b', '', 'Biggest gallery folders'),
-        ` · ${folders.length} folder${folders.length === 1 ? '' : 's'}${folders.length > shown.length ? `, top ${shown.length} shown` : ''}`,
+        ` · ${folders.length} folder${folders.length === 1 ? '' : 's'}${folders.length > shown.length ? `, top ${shown.length} shown` : ''} · tap one to preview or delete`,
     );
 
     const max = shown[0].bytes || 1;
     shown.forEach((folder, index) => {
-        const character = findCharacterForFolder(folder.folder);
+        const owner = findFolderOwner(folder.folder);
         const item = element('div', 'csf_row');
         item.dataset.folder = folder.folder;
-        if (character) {
-            item.setAttribute('role', 'button');
-            item.tabIndex = 0;
-            item.dataset.avatar = character.avatar;
-        } else {
-            item.classList.add('csf_static');
-        }
+        item.setAttribute('role', 'button');
+        item.tabIndex = 0;
         const main = element('div', 'csf_main');
         main.append(
             element('div', 'csf_name', folder.folder),
-            element('div', 'csf_detail', `${folder.files} file${folder.files === 1 ? '' : 's'}${character ? '' : ' · no character with this name'}`),
+            element('div', 'csf_detail', `${folder.files} file${folder.files === 1 ? '' : 's'}${OWNER_LABELS[owner.type]}`),
         );
         const bar = element('div', 'csf_bar');
         bar.style.width = `${Math.max(1, Math.round((folder.bytes / max) * 100))}%`;
         item.append(element('div', 'csf_rank', String(index + 1)), main, element('div', 'csf_total', formatBytes(folder.bytes)), bar);
         list.append(item);
+
+        if (expandedFolder === folder.folder) {
+            item.classList.add('csf_open_row');
+            list.append(buildFolderPanel(root, folder, owner));
+        }
     });
 }
 
@@ -566,7 +733,10 @@ function fileRow(key, label, result) {
 }
 
 async function scan(root) {
-    if (scanning) return;
+    if (scanning || deleting) return;
+    expandedFolder = null;
+    confirmingFolder = null;
+    folderNotice = '';
     const context = getContext();
     const characters = (context?.characters ?? []).filter(c => c && c.avatar);
     if (characters.length === 0) {
@@ -688,12 +858,17 @@ function init() {
         setStatus(root, 'Stopping…');
     });
     root.querySelector('.csf_sort').addEventListener('change', () => render(root));
-    for (const list of root.querySelectorAll('.csf_list')) {
-        onActivate(list, (event) => {
-            const row = event.target.closest('.csf_row');
-            if (row?.dataset.avatar) openCharacter(row.dataset.avatar);
-        });
-    }
+    onActivate(root.querySelector('.csf_characters'), (event) => {
+        const row = event.target.closest('.csf_row');
+        if (row?.dataset.avatar) openCharacter(row.dataset.avatar);
+    });
+    onActivate(root.querySelector('.csf_folders'), (event) => {
+        const row = event.target.closest('.csf_row');
+        if (!row || deleting) return;
+        expandedFolder = expandedFolder === row.dataset.folder ? null : row.dataset.folder;
+        confirmingFolder = null;
+        renderFolders(root);
+    });
 }
 
 if (document.readyState === 'loading') {
