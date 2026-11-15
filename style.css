@@ -1,0 +1,106 @@
+#card_size_finder .csf_info {
+    display: block;
+    opacity: 0.75;
+    margin: 4px 0;
+}
+
+#card_size_finder .csf_controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 6px 0;
+}
+
+#card_size_finder .csf_controls .menu_button {
+    margin: 0;
+    padding-left: 14px;
+    padding-right: 14px;
+}
+
+#card_size_finder .csf_sort {
+    flex: 1;
+    min-width: 140px;
+    margin: 0;
+}
+
+#card_size_finder .csf_status {
+    font-size: 0.9em;
+    opacity: 0.8;
+    min-height: 1.2em;
+}
+
+#card_size_finder .csf_summary {
+    margin: 4px 0 6px;
+}
+
+#card_size_finder .csf_list {
+    max-height: 60vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    border: 1px solid var(--SmartThemeBorderColor, rgba(127, 127, 127, 0.4));
+    border-radius: 8px;
+}
+
+#card_size_finder .csf_list:empty {
+    display: none;
+}
+
+#card_size_finder .csf_row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px 8px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, rgba(127, 127, 127, 0.25));
+}
+
+#card_size_finder .csf_row:last-child {
+    border-bottom: none;
+}
+
+#card_size_finder .csf_row:hover,
+#card_size_finder .csf_row:focus-visible {
+    background: rgba(127, 127, 127, 0.12);
+    outline: none;
+}
+
+#card_size_finder .csf_rank {
+    min-width: 2.2em;
+    text-align: right;
+    opacity: 0.55;
+    font-variant-numeric: tabular-nums;
+}
+
+#card_size_finder .csf_main {
+    flex: 1;
+    min-width: 0;
+}
+
+#card_size_finder .csf_name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#card_size_finder .csf_detail {
+    font-size: 0.8em;
+    opacity: 0.7;
+}
+
+#card_size_finder .csf_total {
+    font-weight: bold;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+#card_size_finder .csf_bar {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    height: 2px;
+    background: var(--SmartThemeQuoteColor, #e18a24);
+    opacity: 0.75;
+    pointer-events: none;
+}
