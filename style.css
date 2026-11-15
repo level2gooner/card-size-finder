@@ -104,3 +104,54 @@
     opacity: 0.75;
     pointer-events: none;
 }
+
+#card_size_finder .csf_breakdown:empty {
+    display: none;
+}
+
+#card_size_finder .csf_breakdown {
+    margin: 6px 0 10px;
+}
+
+#card_size_finder .csf_bd_title {
+    margin-bottom: 4px;
+}
+
+#card_size_finder .csf_bd_row,
+#card_size_finder .csf_bd_sub {
+    position: relative;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 5px 2px 6px;
+}
+
+#card_size_finder .csf_bd_sub {
+    padding: 1px 2px 1px 16px;
+    font-size: 0.82em;
+    opacity: 0.75;
+}
+
+#card_size_finder .csf_bd_label {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+#card_size_finder .csf_bd_size {
+    font-weight: bold;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+#card_size_finder .csf_bd_sub .csf_bd_size {
+    font-weight: normal;
+}
+
+#card_size_finder .csf_hint {
+    margin: 8px 0 4px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--SmartThemeQuoteColor, #e18a24);
+    font-size: 0.9em;
+}

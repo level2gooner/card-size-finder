@@ -1,6 +1,9 @@
 # Card Size Finder
 
-A TauriTavern / SillyTavern extension that lists your characters by how much storage they use: the card image plus their chat history.
+A TauriTavern / SillyTavern extension that shows where your storage goes.
+
+- **Where the space goes:** card images, chats, in-app data (saved prompt history, caches, extension data), gallery and generated images, backgrounds, character sprites and Data Bank files.
+- **Characters by size:** every character ranked by card image plus chat history.
 
 It only reads. Nothing is changed or deleted.
 
@@ -12,10 +15,10 @@ It only reads. Nothing is changed or deleted.
 
 ## Use
 
-1. Open **Card Size Finder** and tap **Scan**. With a large library this can take a minute or two; tap **Stop** any time.
+1. Open **Card Size Finder** and tap **Scan**. Tap **Stop** any time.
 2. Change the sort to see the biggest **card images** or the biggest **chats**.
 3. Tap a character to open it, then delete it from the character's menu if you want.
 
-After deleting characters, tap **Scan** again to refresh the list.
+After deleting anything, tap **Scan** again to refresh.
 
-Sprite, expression and gallery folders aren't counted.
+In-app data sizes are estimates. Not counted: memory/vector indexes and their model, Agent workspaces, extension files, and the system's own web cache.
